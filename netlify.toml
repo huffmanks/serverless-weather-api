@@ -2,9 +2,14 @@
   command = "# no build command"
   functions = "netlify/functions"
   publish = "."
+
+[build.environment]
+  NETLIFY_USE_PNPM = "true"
+
 [functions]
   external_node_modules = ["express", "cors"]
   node_bundler = "esbuild"
+
 [[redirects]]
   force = true
   from = "/api/*"

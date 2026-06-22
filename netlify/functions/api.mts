@@ -1,13 +1,6 @@
-// will need to install packages
-// npm i @sparticuz/chromium@133.0.0 puppeteer-core@24.3.1
-// and update netlify.toml
-// external_node_modules = ["express", "cors", "@sparticuz/chromium"]
-
-// import chromium from "@sparticuz/chromium";
 import cors from "cors";
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
-// import puppeteer from "puppeteer-core";
 import serverless from "serverless-http";
 
 const api = express();
@@ -15,8 +8,8 @@ api.use(express.json({ limit: "10mb" }));
 
 api.use(
   cors({
-    origin: [/^http:\/\/localhost(:\d+)?$/, "https://huffmanks.com"],
-  })
+    origin: [/^http:\/\/localhost(:\d+)?$/, /^https:\/\/(.*\.)?huffmanks\.com$/],
+  }),
 );
 
 api.use(
@@ -32,11 +25,38 @@ api.use(
 
       return ip || req.ip || "localhost";
     },
-  })
+  }),
 );
 
+api.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+
+  if (process.env.NETLIFY_DEV === "true" || (origin && origin.includes("localhost"))) {
+    return next();
+  }
+
+  if (origin) {
+    const isDomainValid = /^https:\/\/(.*\.)?huffmanks\.com$/.test(origin);
+    if (!isDomainValid) {
+      return res.status(403).send("Forbidden: Unauthorized Origin.");
+    }
+    return next();
+  }
+
+  if (referer) {
+    const isRefererValid = /^https:\/\/(.*\.)?huffmanks\.com/.test(referer);
+    if (!isRefererValid) {
+      return res.status(403).send("Forbidden: Unauthorized Referer.");
+    }
+    return next();
+  }
+
+  return res.status(403).send("Forbidden: Direct API access is restricted.");
+});
+
 const router = Router();
-router.get("/hello", (req, res) => res.send("Hello World!"));
+router.get("/hello", (_req, res) => res.send("Hello World!"));
 
 router.get("/weather-data/:weatherSearch", async (req: express.Request, res: express.Response) => {
   try {
@@ -125,58 +145,60 @@ router.get("/weather-data/:weatherSearch", async (req: express.Request, res: exp
   }
 });
 
-// router.post("/generate-pdf", async (req, res) => {
-//   try {
-//     const { htmlContent } = req.body;
+router.post("/generate-pdf", async (req, res) => {
+  try {
+    const { htmlContent } = req.body;
 
-//     if (!htmlContent) {
-//       return res.status(400).send("Missing htmlContent in request body");
-//     }
+    if (!htmlContent) {
+      return res.status(400).send("Missing htmlContent in request body");
+    }
 
-//     chromium.setGraphicsMode = false;
+    const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
+    if (!BROWSERLESS_TOKEN) {
+      return res.status(500).send("PDF Service Token is missing.");
+    }
 
-//     console.log("Starting Puppeteer...");
-//     const browser = await puppeteer.launch({
-//       args: chromium.args,
-//       defaultViewport: chromium.defaultViewport,
-//       executablePath: process.env.CHROME_EXECUTABLE_PATH || (await chromium.executablePath("/var/task/node_modules/@sparticuz/chromium/bin")),
-//       headless: chromium.headless,
-//     });
+    console.log("Sending HTML to Browserless for PDF conversion...");
 
-//     console.log("Opening new page...");
-//     const page = await browser.newPage();
+    const response = await fetch(`https://production-sfo.browserless.io/pdf?token=${BROWSERLESS_TOKEN}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        html: htmlContent,
+        options: {
+          format: "letter",
+          printBackground: true,
+          margin: {
+            top: "40px",
+            right: "0px",
+            bottom: "40px",
+            left: "0px",
+          },
+        },
+      }),
+    });
 
-//     console.log("Setting page content...");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Browserless error: ${errorText}`);
+    }
 
-//     await page.setContent(htmlContent, { waitUntil: "networkidle0" });
+    const pdfBuffer = await response.arrayBuffer();
+    console.log("PDF generated successfully via microservice");
 
-//     console.log("Generating PDF...");
-//     const pdfBuffer = await page.pdf({
-//       format: "letter",
-//       printBackground: true,
-//       margin: {
-//         top: 40,
-//         right: 0,
-//         bottom: 40,
-//         left: 0,
-//       },
-//     });
+    const base64Pdf = Buffer.from(pdfBuffer).toString("base64");
 
-//     console.log("PDF generated successfully");
-//     await browser.close();
-
-//     res.setHeader("Content-Type", "application/pdf");
-//     res.setHeader("Content-Disposition", 'inline; filename="generated.pdf"');
-
-//     // tested with local save and works properly. something with the netlify runtime
-//     // fs.writeFileSync("./test.pdf");
-//     // is sent but PDF arrives blank
-//     res.status(200).end(pdfBuffer);
-//   } catch (error) {
-//     console.error("Error generating PDF:", error);
-//     res.status(500).send("Internal Server Error");
-//   }
-// });
+    return res.status(200).json({
+      success: true,
+      pdf: base64Pdf,
+    });
+  } catch (error: any) {
+    console.error("Error generating PDF:", error);
+    return res.status(500).send(error?.message || "Internal Server Error");
+  }
+});
 
 api.use("/api/", router);
 

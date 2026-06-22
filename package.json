@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "netlify dev"
+    "dev": "netlify dev",
+    "download:pdf": "node scripts/downloadGeneratedPDF.js"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21"
+    "@types/express": "^4.17.21",
+    "netlify-cli": "^26.1.0"
   }
 }
