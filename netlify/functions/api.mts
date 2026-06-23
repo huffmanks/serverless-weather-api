@@ -1,6 +1,7 @@
 import cors from "cors";
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFNumber, PDFString } from "pdf-lib";
 import serverless from "serverless-http";
 
 const api = express();
@@ -147,7 +148,7 @@ router.get("/weather-data/:weatherSearch", async (req: express.Request, res: exp
 
 router.post("/generate-pdf", async (req, res) => {
   try {
-    const { htmlContent } = req.body;
+    const { htmlContent, issueNumber, volumeNumber } = req.body;
 
     if (!htmlContent) {
       return res.status(400).send("Missing htmlContent in request body");
@@ -188,11 +189,91 @@ router.post("/generate-pdf", async (req, res) => {
     const pdfBuffer = await response.arrayBuffer();
     console.log("PDF generated successfully via microservice");
 
-    const base64Pdf = Buffer.from(pdfBuffer).toString("base64");
+    const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
+    let match;
+    const headingTitles: string[] = [];
+
+    while ((match = h2Regex.exec(htmlContent)) !== null) {
+      const cleanText = match[1].replace(/<[^>]*>/g, "").trim();
+      if (cleanText) headingTitles.push(cleanText);
+    }
+
+    const pdfDoc = await PDFDocument.load(Buffer.from(pdfBuffer));
+    const context = pdfDoc.context;
+    const pages = pdfDoc.getPages();
+
+    if (headingTitles.length > 0) {
+      console.log(`Injecting ${headingTitles.length} low-level outline dictionary refs...`);
+
+      const outlinesDictRef = context.nextRef();
+      const outlineItemRefs = headingTitles.map(() => context.nextRef());
+
+      for (let i = 0; i < headingTitles.length; i++) {
+        const targetPageIndex = Math.min(i, pages.length - 1);
+        const targetPageRef = pages[targetPageIndex].ref;
+
+        const destArray = PDFArray.withContext(context);
+        destArray.push(targetPageRef);
+        destArray.push(PDFName.of("XYZ"));
+        destArray.push(PDFNull);
+        destArray.push(PDFNull);
+        destArray.push(PDFNull);
+
+        const itemMap = new Map();
+        itemMap.set(PDFName.Title, PDFString.of(headingTitles[i]));
+        itemMap.set(PDFName.Parent, outlinesDictRef);
+        itemMap.set(PDFName.of("Dest"), destArray);
+
+        if (i > 0) {
+          itemMap.set(PDFName.of("Prev"), outlineItemRefs[i - 1]);
+        }
+        if (i < headingTitles.length - 1) {
+          itemMap.set(PDFName.of("Next"), outlineItemRefs[i + 1]);
+        }
+
+        const outlineItemDict = PDFDict.fromMapWithContext(itemMap, context);
+        context.assign(outlineItemRefs[i], outlineItemDict);
+      }
+
+      const outlinesDictMap = new Map();
+      outlinesDictMap.set(PDFName.Type, PDFName.of("Outlines"));
+      outlinesDictMap.set(PDFName.of("First"), outlineItemRefs[0]);
+      outlinesDictMap.set(PDFName.of("Last"), outlineItemRefs[outlineItemRefs.length - 1]);
+      outlinesDictMap.set(PDFName.of("Count"), PDFNumber.of(headingTitles.length));
+
+      const outlinesDict = PDFDict.fromMapWithContext(outlinesDictMap, context);
+      context.assign(outlinesDictRef, outlinesDict);
+
+      pdfDoc.catalog.set(PDFName.of("Outlines"), outlinesDictRef);
+    }
+
+    const finalizedBytes = await pdfDoc.save();
+    const base64Pdf = Buffer.from(finalizedBytes).toString("base64");
+
+    const headingsMap: Array<{ title: string; page: number }> = [];
+
+    for (let i = 0; i < headingTitles.length; i++) {
+      const targetPageIndex = Math.min(i, pages.length - 1);
+
+      headingsMap.push({
+        title: headingTitles[i],
+        page: targetPageIndex + 1,
+      });
+    }
+
+    let snippetHtml = `<div class="mb-3"><a href="a/CHANGE_ME" title="CAP Vol. ${volumeNumber} - Issue ${issueNumber}" target="_blank" rel="noopener">Issue #${issueNumber}</a></div>\n<ul>\n`;
+
+    headingsMap.forEach((item) => {
+      const pageFragment = item.page > 1 ? `#page=${item.page}` : "";
+      snippetHtml += `  <li><a href="a/CHANGE_ME${pageFragment}" target="_blank" rel="noopener">${item.title}</a></li>\n`;
+    });
+
+    snippetHtml += `</ul>`;
 
     return res.status(200).json({
       success: true,
       pdf: base64Pdf,
+      snippetHtml,
     });
   } catch (error: any) {
     console.error("Error generating PDF:", error);
