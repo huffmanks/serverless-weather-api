@@ -16,13 +16,13 @@
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.5.0",
+    "pdf-lib": "^1.17.1",
     "serverless-http": "^3.2.0",
     "typescript": "^5.4.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
-    "netlify-cli": "^26.1.0",
-    "pdf-lib": "^1.17.1"
+    "netlify-cli": "^26.1.0"
   }
 }

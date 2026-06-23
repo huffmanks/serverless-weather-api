@@ -7,7 +7,6 @@
   NETLIFY_USE_PNPM = "true"
 
 [functions]
-  external_node_modules = ["express", "cors"]
   node_bundler = "esbuild"
 
 [[redirects]]
